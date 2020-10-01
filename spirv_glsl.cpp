@@ -721,9 +721,9 @@ void CompilerGLSL::emit_header()
 		}
 		else if (ext == "GL_KHR_shader_subgroup_vote")
 		{
-			declaredKHR_shader_group_vote = true;
+			declaredKHR_shader_subgroup_vote = true;
 			if (options.vulkan_semantics)
-				statement("#extensions GL_KHR_shader_subgroup_vote : require");
+				statement("#extension GL_KHR_shader_subgroup_vote : require");
 			else
 			{
 				statement("#if defined(GL_ARB_shader_group_vote)");
@@ -736,6 +736,35 @@ void CompilerGLSL::emit_header()
 				statement("#else");
 				statement("#error No extensions available for subgroupAllEqual()");
 				statement("#endif");
+			}
+		}
+		else if (ext == "GL_KHR_shader_subgroup_basic")
+		{
+			declaredKHR_shader_subgroup_basic = true;
+			if (options.vulkan_semantics)
+				statement("#extension GL_KHR_shader_subgroup_basic : require");
+			else
+			{
+				statement("#if defined(GL_NV_shader_thread_group)");
+
+				statement("#define GL_NV_shader_thread_group");
+
+				statement("#elif defined(GL_ARB_shader_ballot)");
+
+				statement("#extension GL_ARB_shader_ballot : require");
+				statement("#extension GL_AMD_gcn_shader : enable");
+				statement("#ifdef GL_AMD_gcn_shader");
+				statement("#define gl_SubgroupSize uint(gl_SIMDGroupSizeAMD)");
+				statement("#else defined(GL_ARB_shader_ballot)");
+				statement("#define gl_SubgroupSize gl_SubGroupSizeARB");
+				statement("#endif");
+				statement("#define gl_SubgroupInvocationID gl_SubGroupInvocationARB");
+
+				statement("#endif");
+
+				statement("#define gl_SubgroupID (gl_LocalInvocationIndex/gl_SubgroupSize)");
+				statement("#define gl_NumSubgroups "
+				          "(gl_WorkGroupSize.x*gl_WorkGroupSize.y*gl_WorkGroupSize.z/gl_SubgroupSize)");
 			}
 		}
 		else
@@ -3280,7 +3309,7 @@ void CompilerGLSL::emit_resources()
 void CompilerGLSL::emit_extension_workarounds()
 {
 	//GL_KHR_shader_subgroup_vote
-	if (!options.vulkan_semantics && declaredKHR_shader_group_vote)
+	if (!options.vulkan_semantics && declaredKHR_shader_subgroup_vote)
 	{
 		statement("#ifdef GL_ARB_shader_group_vote");
 		statement("bool subgroupAll(in bool v) { return allInvocationsARB(v); }");
@@ -3313,9 +3342,39 @@ void CompilerGLSL::emit_extension_workarounds()
 		statement("#elif defined(GL_AMD_gcn_shader)&&defined(GL_AMD_gpu_shader_int64)");
 		statement("bool subgroupAll(in bool value) { return ballotAMD(value)==ballotAMD(true); }");
 		statement("bool subgroupAny(in bool value) { return ballotAMD(value)!=0ull; }");
-		statement("bool subgroupAllEqual(in bool value) { uint64_t b=ballotAMD(value); return b==0uLL || b==ballotAMD(true); }");
+		statement("bool subgroupAllEqual(in bool value) { uint64_t b=ballotAMD(value); return b==0uLL || "
+		          "b==ballotAMD(true); }");
 
 		statement("#endif");
+	}
+	//GL_KHR_shader_subgroup_basic
+	if (!options.vulkan_semantics && declaredKHR_shader_subgroup_basic)
+	{
+	/* TODO?
+	https://github.com/KhronosGroup/SPIRV-Cross/issues/1351
+	Neither GL_ARB_shader_ballot, GL_NV_shader_thread_group or AMD_gcn_shader support subgroup barriers (execution or memory) explicitly.
+	However the wording of GL_NV_shader_thread_group and ARB_shader_ballot explicitly stat that invocations run in lock-step.
+	So this should mean that Turing and Volta (or any other GPU architecture which supports per-invocation Program Counters)
+	should either not report these extensions or insert synchronization implicitly in the shaders using those extensions.
+	**This could allow us to turn any subgroupBarrier into a NO-OP.**
+	However the extensions do not guarantee anything about memory dependencies.
+	So the presence of subgroupMemoryBarrier* function call in the SPV should produce an error.
+	*/
+		const std::string workaround = //multi-line "statements" are ok?
+R"(bool subgroupElect()
+{
+#ifdef GL_NV_shader_thread_group 
+    int firstLive = findLSB(ballotThreadNV(true));
+    return gl_ThreadInWarpNV==uint(firstLive);
+#else 
+    uvec2 activeMask = unpackUint2x32(ballotARB(true));
+    int firstLive = findLSB(activeMask.x);
+    if (firstLive==-1)
+        firstLive = findLSB(activeMask.y)+32;
+    return gl_SubgroupInvocationID==uint(firstLive);
+#endif 
+})";
+		statement(workaround);
 	}
 }
 

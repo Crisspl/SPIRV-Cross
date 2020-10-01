@@ -399,7 +399,8 @@ protected:
 	void end_scope_decl(const std::string &decl);
 
 	Options options;
-	bool declaredKHR_shader_group_vote = false;
+	bool declaredKHR_shader_subgroup_basic = false;
+	bool declaredKHR_shader_subgroup_vote = false;
 
 	virtual std::string type_to_array_glsl(
 	    const SPIRType &type); // Allow Metal to use the array<T> template to make arrays a value type
