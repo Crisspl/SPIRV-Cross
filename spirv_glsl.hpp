@@ -399,6 +399,7 @@ protected:
 	void end_scope_decl(const std::string &decl);
 
 	Options options;
+	bool declaredKHR_shader_group_vote = false;
 
 	virtual std::string type_to_array_glsl(
 	    const SPIRType &type); // Allow Metal to use the array<T> template to make arrays a value type
@@ -483,6 +484,7 @@ protected:
 
 	void emit_struct(SPIRType &type);
 	void emit_resources();
+	void emit_extension_workarounds();
 	void emit_buffer_block_native(const SPIRVariable &var);
 	void emit_buffer_reference_block(SPIRType &type, bool forward_declaration);
 	void emit_buffer_block_legacy(const SPIRVariable &var);

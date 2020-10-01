@@ -548,6 +548,7 @@ string CompilerGLSL::compile()
 
 		emit_header();
 		emit_resources();
+		emit_extension_workarounds();
 
 		emit_function(get<SPIRFunction>(ir.default_entry_point), Bitset());
 
@@ -717,6 +718,25 @@ void CompilerGLSL::emit_header()
 			statement("#ifdef ", ext);
 			statement("#extension ", ext, " : enable");
 			statement("#endif");
+		}
+		else if (ext == "GL_KHR_shader_subgroup_vote")
+		{
+			declaredKHR_shader_group_vote = true;
+			if (options.vulkan_semantics)
+				statement("#extensions GL_KHR_shader_subgroup_vote : require");
+			else
+			{
+				statement("#if defined(GL_ARB_shader_group_vote)");
+				statement("#extension GL_ARB_shader_group_vote : require");
+				statement("#elif defined(GL_NV_gpu_shader5)");
+				statement("#extension GL_NV_gpu_shader5 : require");
+				statement("#elif defined(GL_AMD_gcn_shader)&&defined(GL_AMD_gpu_shader_int64)");
+				statement("#extension GL_AMD_gcn_shader : require");
+				statement("#extension GL_AMD_gpu_shader_int64 : enable"); //needed?
+				statement("#else");
+				statement("#error No extensions available for subgroupAllEqual()");
+				statement("#endif");
+			}
 		}
 		else
 			statement("#extension ", ext, " : require");
@@ -2890,8 +2910,7 @@ void CompilerGLSL::declare_undefined_values()
 		if (options.force_zero_initialized_variables && type_can_zero_initialize(type))
 			initializer = join(" = ", to_zero_initialized_expression(undef.basetype));
 
-		statement(variable_decl(type, to_name(undef.self), undef.self), initializer,
-		          ";");
+		statement(variable_decl(type, to_name(undef.self), undef.self), initializer, ";");
 		emitted = true;
 	});
 
@@ -3256,6 +3275,48 @@ void CompilerGLSL::emit_resources()
 		statement("");
 
 	declare_undefined_values();
+}
+
+void CompilerGLSL::emit_extension_workarounds()
+{
+	//GL_KHR_shader_subgroup_vote
+	if (!options.vulkan_semantics && declaredKHR_shader_group_vote)
+	{
+		statement("#ifdef GL_ARB_shader_group_vote");
+		statement("bool subgroupAll(in bool v) { return allInvocationsARB(v); }");
+		statement("bool subgroupAny(in bool v) { return anyInvocationARB(v); }");
+		statement("#define SUBGROUP_ALL_EQUAL_WORKAROUND(type) bool subgroupAllEqual(type value) { return "
+		          "allInvocationsEqualARB(equal(value)); }");
+		statement("SUBGROUP_ALL_EQUAL_WORKAROUND(int)");
+		statement("SUBGROUP_ALL_EQUAL_WORKAROUND(ivec2)");
+		statement("SUBGROUP_ALL_EQUAL_WORKAROUND(ivec3)");
+		statement("SUBGROUP_ALL_EQUAL_WORKAROUND(ivec4)");
+		statement("SUBGROUP_ALL_EQUAL_WORKAROUND(uint)");
+		statement("SUBGROUP_ALL_EQUAL_WORKAROUND(uvec2)");
+		statement("SUBGROUP_ALL_EQUAL_WORKAROUND(uvec3)");
+		statement("SUBGROUP_ALL_EQUAL_WORKAROUND(uvec4)");
+		statement("SUBGROUP_ALL_EQUAL_WORKAROUND(float)");
+		statement("SUBGROUP_ALL_EQUAL_WORKAROUND(vec2)");
+		statement("SUBGROUP_ALL_EQUAL_WORKAROUND(vec3)");
+		statement("SUBGROUP_ALL_EQUAL_WORKAROUND(vec4)");
+		statement("SUBGROUP_ALL_EQUAL_WORKAROUND(double)");
+		statement("SUBGROUP_ALL_EQUAL_WORKAROUND(dvec2)");
+		statement("SUBGROUP_ALL_EQUAL_WORKAROUND(dvec3)");
+		statement("SUBGROUP_ALL_EQUAL_WORKAROUND(dvec4)");
+		statement("#undef SUBGROUP_ALL_EQUAL_WORKAROUND");
+
+		statement("#elif defined(GL_NV_gpu_shader5)");
+		statement("bool subgroupAll(in bool value) { return allThreadsNV(value); }");
+		statement("bool subgroupAny(in bool value) { return anyThreadNV(value); }");
+		statement("bool subgroupAllEqual(in bool value) { return allThreadsEqualNV(value); }");
+
+		statement("#elif defined(GL_AMD_gcn_shader)&&defined(GL_AMD_gpu_shader_int64)");
+		statement("bool subgroupAll(in bool value) { return ballotAMD(value)==ballotAMD(true); }");
+		statement("bool subgroupAny(in bool value) { return ballotAMD(value)!=0ull; }");
+		statement("bool subgroupAllEqual(in bool value) { uint64_t b=ballotAMD(value); return b==0uLL || b==ballotAMD(true); }");
+
+		statement("#endif");
+	}
 }
 
 // Returns a string representation of the ID, usable as a function arg.
@@ -9852,7 +9913,7 @@ void CompilerGLSL::emit_instruction(const Instruction &instruction)
 	{
 		auto &type = get<SPIRType>(ops[0]);
 		if (type.vecsize > 1)
-			GLSL_UFOP(not );
+			GLSL_UFOP(not);
 		else
 			GLSL_UOP(!);
 		break;
